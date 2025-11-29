@@ -111,7 +111,7 @@ th { background:#f0f0f0; }
 
 <hr style="margin:30px 0;">
 
-<!-- ================== 导入导出 ================== -->
+<!-- ================== 导入 / 导出 ================== -->
 <section>
 <h2>导入 / 导出</h2>
 <input type="file" id="fileInput" accept=".csv">
@@ -179,13 +179,16 @@ function save(){ localStorage.setItem(LS_KEY, JSON.stringify(records)); }
 /* ========== 添加 ========== */
 function addRecord(){
     const r = {
-        date: dateInput.value,
-        type: typeInput.value,
-        cate: cateInput.value,
-        amount: Number(amountInput.value||0),
-        remark: remarkInput.value
+        date: (dateInput.value || "").trim(),
+        type: (typeInput.value || "").trim(),
+        cate: (cateInput.value || "").trim(),
+        amount: Number(amountInput.value || 0),
+        remark: (remarkInput.value || "").trim()
     };
-    if(!r.date || !r.amount){ alert("请填写日期与金额"); return; }
+    if(!r.date || !r.amount){
+        alert("请填写日期与金额");
+        return;
+    }
 
     records.push(r);
     save();
@@ -198,7 +201,7 @@ function addRecord(){
 
 /* ========== 年份列表 ========== */
 function refreshYears(){
-    const years = [...new Set(records.map(r=>r.date.slice(0,4)))].sort();
+    const years = [...new Set(records.map(r=>r.date.slice(0,4)).filter(Boolean))].sort();
     yearSelect.innerHTML="";
     years.forEach(y=>{
         const o=document.createElement("option");
@@ -215,6 +218,7 @@ function filteredRecords(){
     const q = quarterSelect.value;
 
     return records.filter(r=>{
+        if(!r.date) return false;
         const yr = r.date.slice(0,4);
         const mo = Number(r.date.slice(5,7));
 
@@ -257,7 +261,10 @@ function renderSummary(){
 function renderTable(){
     const list = filteredRecords();
 
-    if(list.length===0){ tableBox.innerHTML="无记录"; return; }
+    if(list.length===0){
+        tableBox.innerHTML="无记录";
+        return;
+    }
 
     let html = `
     <table><thead><tr>
@@ -292,48 +299,133 @@ function removeRecord(i){
     renderSummary();
 }
 
-/* ========== 导出 CSV ========== */
+/* ========== 导出 CSV（自动命名 + UTF-8 BOM） ========== */
 function exportCSV(){
     const list = filteredRecords();
-    if(list.length===0){ alert("无数据可导出"); return; }
+    if(list.length===0){
+        alert("无数据可导出");
+        return;
+    }
 
     let rows = ["日期,类型,分类,金额,备注"];
     list.forEach(r=>{
-        rows.push(`${r.date},${r.type},${r.cate},${r.amount},${r.remark||""}`);
+        const date = r.date || "";
+        const type = r.type || "";
+        const cate = r.cate || "";
+        const amount = isNaN(r.amount) ? "" : r.amount;
+        // 简单转义备注中的引号
+        const remarkRaw = (r.remark || "").replace(/"/g, '""');
+        const remark = remarkRaw.includes(",") ? `"${remarkRaw}"` : remarkRaw;
+        rows.push(`${date},${type},${cate},${amount},${remark}`);
     });
 
-    const csv="\uFEFF"+rows.join("\n");
+    const csv = "\uFEFF" + rows.join("\n");
+
+    // 自动生成文件名：ledger_YYYY-MM-DD_HH-mm.csv
+    const now = new Date();
+    const y = now.getFullYear();
+    const mo = String(now.getMonth()+1).padStart(2,"0");
+    const d = String(now.getDate()).padStart(2,"0");
+    const hh = String(now.getHours()).padStart(2,"0");
+    const mm = String(now.getMinutes()).padStart(2,"0");
+    const filename = `ledger_${y}-${mo}-${d}_${hh}-${mm}.csv`;
+
     const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
-    a.download="账目.csv";
+    a.download=filename;
     a.click();
 }
 
-/* ========== 导入 CSV ========== */
+/* ========== 严格比较两条记录是否相同（去重用） ========== */
+function isSameRecord(a, b){
+    return (a.date || "").trim() === (b.date || "").trim()
+        && (a.type || "").trim() === (b.type || "").trim()
+        && (a.cate || "").trim() === (b.cate || "").trim()
+        && Number(a.amount) === Number(b.amount)
+        && (a.remark || "").trim() === (b.remark || "").trim();
+}
+
+/* ========== 导入 CSV（智能合并 + 严格去重） ========== */
 function importCSV(){
     const file=fileInput.files[0];
-    if(!file){ alert("请选择文件"); return; }
+    if(!file){
+        alert("请选择 CSV 文件");
+        return;
+    }
 
     const reader=new FileReader();
     reader.onload=e=>{
-        const lines=e.target.result.split(/\r?\n/).filter(l=>l.trim());
-        const newRecs=[];
-        for(let i=1;i<lines.length;i++){
-            const c=lines[i].split(",");
-            if(c.length<4) continue;
-            newRecs.push({
-                date:c[0], type:c[1], cate:c[2], amount:Number(c[3]), remark:c[4]||""
-            });
+        const text=e.target.result;
+        const lines=text.split(/\r?\n/).filter(l=>l.trim());
+        if(lines.length <= 1){
+            alert("文件内容为空或没有数据行");
+            return;
         }
-        records=records.concat(newRecs);
-        save(); refreshYears(); renderTable(); renderSummary();
-        alert("导入成功");
+
+        // 旧记录拷贝一份用于对比
+        const existing = records.slice();
+        let added = 0;
+        let skipped = 0;
+
+        for(let i=1;i<lines.length;i++){
+            const line = lines[i].trim();
+            if(!line) continue;
+
+            // 简单按逗号切分（如果备注里经常有逗号，可以后续改进为更完整的 CSV 解析）
+            const cols = line.split(",");
+            if(cols.length < 4) continue;
+
+            const rec = {
+                date: (cols[0] || "").trim(),
+                type: (cols[1] || "").trim(),
+                cate: (cols[2] || "").trim(),
+                amount: Number((cols[3] || "").trim() || 0),
+                remark: (cols[4] || "").trim()
+            };
+
+            if(!rec.date){
+                skipped++;
+                continue;
+            }
+
+            // 在现有 records + 本次新增的记录里查是否已存在
+            const duplicate = records.some(r => isSameRecord(r, rec));
+            if(duplicate){
+                skipped++;
+            }else{
+                records.push(rec);
+                added++;
+            }
+        }
+
+        // 导入后按日期排序（简单按字符串排序，前提是日期为 YYYY-MM-DD）
+        records.sort((a,b)=>{
+            if(!a.date && !b.date) return 0;
+            if(!a.date) return -1;
+            if(!b.date) return 1;
+            return a.date.localeCompare(b.date);
+        });
+
+        save();
+        refreshYears();
+        renderTable();
+        renderSummary();
+
+        alert(`导入完成：新增 ${added} 条记录，跳过 ${skipped} 条重复或无效记录。`);
     };
     reader.readAsText(file,"utf-8");
 }
 
-/* ========== 初次渲染 ========== */
+/* ========== 重置筛选 ========== */
+function resetFilter(){
+    monthSelect.value="all";
+    quarterSelect.value="all";
+    renderTable();
+    renderSummary();
+}
+
+/* ========== 初次渲染与事件绑定 ========== */
 yearSelect.addEventListener("change",()=>{ renderTable(); renderSummary(); });
 monthSelect.addEventListener("change",()=>{ renderTable(); renderSummary(); });
 quarterSelect.addEventListener("change",()=>{ renderTable(); renderSummary(); });
