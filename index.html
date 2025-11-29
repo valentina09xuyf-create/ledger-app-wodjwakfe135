@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>个体户记账系统（PWA版）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+
+<!-- PWA manifest -->
+<link rel="manifest" href="manifest.json">
+
+<!-- iOS 安装支持 -->
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1f2937">
+
+<style>
+/* ——基础—— */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui;
+    background: #f5f5f5;
+    margin: 0; padding: 0;
+}
+header {
+    background: #1f2937; color: white;
+    padding: 16px 20px; font-size: 18px;
+}
+main {
+    max-width: 960px;
+    margin: 20px auto;
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+h2 {
+    font-size: 16px; margin-top: 0;
+    border-left: 4px solid #2563eb;
+    padding-left: 8px; color: #111;
+}
+input, select, button {
+    padding: 8px; margin: 4px 0;
+    border-radius: 6px; border: 1px solid #ccc;
+    font-size: 14px;
+}
+button { cursor: pointer; border: none; }
+button.primary { background: #2563eb; color: white; }
+button.secondary { background: #e5e7eb; }
+button.danger { background: #dc2626; color: white; }
+
+table { width:100%; border-collapse: collapse; margin-top:10px; }
+th, td {
+    border-bottom:1px solid #ddd;
+    padding:6px 4px; font-size:14px;
+}
+th { background:#f0f0f0; }
+
+@media (max-width:700px){
+    main{ padding:12px; border-radius:0; }
+    th,td{ font-size:12px; }
+    .row{ flex-direction:column; }
+}
+.row{ display:flex; gap:10px; flex-wrap:wrap; }
+</style>
+</head>
+
+<body>
+
+<header>个体户记账系统（PWA版）</header>
+
+<main>
+
+<!-- ================== 新增账目 ================== -->
+<section>
+<h2>新增账目</h2>
+
+<div class="row">
+    <div>
+        <label>日期：</label><br>
+        <input type="date" id="dateInput">
+    </div>
+    <div>
+        <label>类型：</label><br>
+        <select id="typeInput">
+            <option value="收入">收入</option>
+            <option value="支出">支出</option>
+        </select>
+    </div>
+    <div>
+        <label>分类：</label><br>
+        <select id="cateInput">
+            <option value="经营收入">经营收入</option>
+            <option value="进货成本">进货成本</option>
+            <option value="办公费用">办公费用</option>
+            <option value="快递费用">快递费用</option>
+            <option value="税款预缴">税款预缴</option>
+            <option value="其他">其他</option>
+        </select>
+    </div>
+    <div>
+        <label>金额：</label><br>
+        <input type="number" id="amountInput" placeholder="0.00" step="0.01">
+    </div>
+    <div style="flex:1;">
+        <label>备注：</label><br>
+        <input type="text" id="remarkInput" placeholder="说明">
+    </div>
+</div>
+
+<button class="primary" onclick="addRecord()">添加账目</button>
+</section>
+
+<hr style="margin:30px 0;">
+
+<!-- ================== 导入导出 ================== -->
+<section>
+<h2>导入 / 导出</h2>
+<input type="file" id="fileInput" accept=".csv">
+<button class="secondary" onclick="importCSV()">导入 CSV</button>
+<button class="secondary" onclick="exportCSV()">导出当前列表 CSV</button>
+<p style="font-size:13px;color:#666;">CSV 表头：日期,类型,分类,金额,备注</p>
+</section>
+
+<hr style="margin:30px 0;">
+
+<!-- ================== 筛选 ================== -->
+<section>
+<h2>筛选</h2>
+
+<label>年份：</label>
+<select id="yearSelect"></select>
+
+<label>月份：</label>
+<select id="monthSelect">
+    <option value="all">全部</option>
+    <option value="1">1月</option><option value="2">2月</option><option value="3">3月</option>
+    <option value="4">4月</option><option value="5">5月</option><option value="6">6月</option>
+    <option value="7">7月</option><option value="8">8月</option><option value="9">9月</option>
+    <option value="10">10月</option><option value="11">11月</option><option value="12">12月</option>
+</select>
+
+<label>季度：</label>
+<select id="quarterSelect">
+    <option value="all">全部</option>
+    <option value="Q1">第一季度</option>
+    <option value="Q2">第二季度</option>
+    <option value="Q3">第三季度</option>
+    <option value="Q4">第四季度</option>
+</select>
+
+<button class="secondary" onclick="resetFilter()">重置</button>
+</section>
+
+<hr style="margin:30px 0;">
+
+<!-- ================== 利润统计 ================== -->
+<section>
+<h2>经营统计</h2>
+<div id="summaryBox" style="font-size:14px;line-height:1.6;">
+（自动计算中…）
+</div>
+</section>
+
+<hr style="margin:30px 0;">
+
+<!-- ================== 账目列表 ================== -->
+<section>
+<h2>账目列表</h2>
+<div id="tableBox">暂无记录</div>
+</section>
+
+</main>
+
+<script>
+/* ========== 数据 ========== */
+const LS_KEY = "ledger_records_pwa";
+let records = JSON.parse(localStorage.getItem(LS_KEY) || "[]");
+function save(){ localStorage.setItem(LS_KEY, JSON.stringify(records)); }
+
+/* ========== 添加 ========== */
+function addRecord(){
+    const r = {
+        date: dateInput.value,
+        type: typeInput.value,
+        cate: cateInput.value,
+        amount: Number(amountInput.value||0),
+        remark: remarkInput.value
+    };
+    if(!r.date || !r.amount){ alert("请填写日期与金额"); return; }
+
+    records.push(r);
+    save();
+    refreshYears();
+    renderTable();
+    renderSummary();
+
+    dateInput.value=""; amountInput.value=""; remarkInput.value="";
+}
+
+/* ========== 年份列表 ========== */
+function refreshYears(){
+    const years = [...new Set(records.map(r=>r.date.slice(0,4)))].sort();
+    yearSelect.innerHTML="";
+    years.forEach(y=>{
+        const o=document.createElement("option");
+        o.value=y; o.textContent=y+"年";
+        yearSelect.appendChild(o);
+    });
+}
+refreshYears();
+
+/* ========== 筛选 ========== */
+function filteredRecords(){
+    const y = yearSelect.value;
+    const m = monthSelect.value;
+    const q = quarterSelect.value;
+
+    return records.filter(r=>{
+        const yr = r.date.slice(0,4);
+        const mo = Number(r.date.slice(5,7));
+
+        if(yr!==y) return false;
+        if(m!=="all" && mo!==Number(m)) return false;
+
+        if(q!=="all"){
+            const qn = Math.ceil(mo/3);
+            if(q==="Q1" && qn!==1) return false;
+            if(q==="Q2" && qn!==2) return false;
+            if(q==="Q3" && qn!==3) return false;
+            if(q==="Q4" && qn!==4) return false;
+        }
+        return true;
+    });
+}
+
+/* ========== 利润计算 ========== */
+function renderSummary(){
+    const list = filteredRecords();
+
+    let income = 0, cost = 0;
+    list.forEach(r=>{
+        if(r.type==="收入") income += r.amount;
+        if(r.type==="支出") cost += r.amount;
+    });
+
+    const profit = income - cost;
+
+    summaryBox.innerHTML = `
+    ✔ 本期收入：<b>${income.toFixed(2)}</b> 元<br>
+    ✔ 本期成本：<b>${cost.toFixed(2)}</b> 元<br>
+    ✔ 本期利润（收入 - 成本）：<b style="color:${profit>=0?'#16a34a':'#dc2626'};">
+    ${profit.toFixed(2)} 元
+    </b>
+    `;
+}
+
+/* ========== 表格 ========== */
+function renderTable(){
+    const list = filteredRecords();
+
+    if(list.length===0){ tableBox.innerHTML="无记录"; return; }
+
+    let html = `
+    <table><thead><tr>
+        <th>日期</th><th>类型</th><th>分类</th><th>金额</th><th>备注</th><th>操作</th>
+    </tr></thead><tbody>
+    `;
+
+    list.forEach((r)=>{
+        const idx = records.indexOf(r);
+        html += `
+        <tr>
+            <td>${r.date}</td>
+            <td>${r.type}</td>
+            <td>${r.cate}</td>
+            <td>${r.amount.toFixed(2)}</td>
+            <td>${r.remark||""}</td>
+            <td><button class="danger" onclick="removeRecord(${idx})">删除</button></td>
+        </tr>`;
+    });
+
+    html += "</tbody></table>";
+    tableBox.innerHTML = html;
+}
+
+/* ========== 删除 ========== */
+function removeRecord(i){
+    if(!confirm("确定删除？")) return;
+    records.splice(i,1);
+    save();
+    refreshYears();
+    renderTable();
+    renderSummary();
+}
+
+/* ========== 导出 CSV ========== */
+function exportCSV(){
+    const list = filteredRecords();
+    if(list.length===0){ alert("无数据可导出"); return; }
+
+    let rows = ["日期,类型,分类,金额,备注"];
+    list.forEach(r=>{
+        rows.push(`${r.date},${r.type},${r.cate},${r.amount},${r.remark||""}`);
+    });
+
+    const csv="\uFEFF"+rows.join("\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download="账目.csv";
+    a.click();
+}
+
+/* ========== 导入 CSV ========== */
+function importCSV(){
+    const file=fileInput.files[0];
+    if(!file){ alert("请选择文件"); return; }
+
+    const reader=new FileReader();
+    reader.onload=e=>{
+        const lines=e.target.result.split(/\r?\n/).filter(l=>l.trim());
+        const newRecs=[];
+        for(let i=1;i<lines.length;i++){
+            const c=lines[i].split(",");
+            if(c.length<4) continue;
+            newRecs.push({
+                date:c[0], type:c[1], cate:c[2], amount:Number(c[3]), remark:c[4]||""
+            });
+        }
+        records=records.concat(newRecs);
+        save(); refreshYears(); renderTable(); renderSummary();
+        alert("导入成功");
+    };
+    reader.readAsText(file,"utf-8");
+}
+
+/* ========== 初次渲染 ========== */
+yearSelect.addEventListener("change",()=>{ renderTable(); renderSummary(); });
+monthSelect.addEventListener("change",()=>{ renderTable(); renderSummary(); });
+quarterSelect.addEventListener("change",()=>{ renderTable(); renderSummary(); });
+
+renderTable();
+renderSummary();
+
+/* ========== PWA 注册 ========== */
+if("serviceWorker" in navigator){
+    navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+
+</body>
+</html>
